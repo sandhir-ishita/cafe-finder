@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Smart Cafe Finder — docker-compose.yml
+#
+# Usage:
+#   Development (with .env files):
+#     docker-compose up --build
+#
+#   Stop and remove containers + networks:
+#     docker-compose down
+#
+# Required env file: backend/.env  (copy from backend/.env.example)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+  # ── Backend (Express API) ──────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cafe-finder-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    # Load all secrets from backend/.env — never hardcode secrets here
+    env_file:
+      - ./backend/.env
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+    # Expose backend on an internal network so frontend can reach it
+    networks:
+      - cafe-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Frontend (React + nginx) ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Tells Vite where the backend lives at BUILD time.
+        # In production, replace this with your deployed backend URL.
+        VITE_API_URL: http://localhost:5000
+    container_name: cafe-finder-ui
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    # Frontend should only start after backend is healthy
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - cafe-network
+
+networks:
+  cafe-network:
+    driver: bridge

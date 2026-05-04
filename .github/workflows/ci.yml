@@ -1,0 +1,109 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Smart Cafe Finder — GitHub Actions CI/CD
+#
+# Triggers: Every push and pull request to main or develop.
+#
+# Pipeline stages:
+#   1. lint-and-test  — lints frontend, runs backend integration tests
+#   2. docker-build   — builds both Docker images to catch build errors early
+#
+# To add auto-deploy to Render/Vercel, add a "deploy" job that runs on
+# push to main only, after lint-and-test passes.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1: Lint + Test
+  # ────────────────────────────────────────────────────────────────────────────
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Backend ──────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run backend tests
+        working-directory: backend
+        env:
+          # Integration tests use mongodb-memory-server, no real DB needed.
+          # JWT_SECRET is set inside the test file itself for safety.
+          NODE_ENV: test
+        run: npm test
+
+      # ── Frontend ─────────────────────────────────────────────────────────
+      - name: Set up Node.js 20 (frontend)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: Docker Build Validation
+  # Ensures both Dockerfiles build successfully on every PR.
+  # This catches dependency issues before they reach production.
+  # ────────────────────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    # Only run this on pushes to main (saves CI minutes on every PR)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: lint-and-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          tags: cafe-finder-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
+          tags: cafe-finder-frontend:ci
+          build-args: |
+            VITE_API_URL=http://localhost:5000
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

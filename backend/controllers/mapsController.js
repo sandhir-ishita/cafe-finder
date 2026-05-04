@@ -1,0 +1,86 @@
+const Cafe = require("../models/Cafe");
+const { fetchGooglePlacesForImport, mapPlaceToCafe } = require("../services/mapsService");
+
+async function searchPlaces(req, res) {
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    return res.status(400).json({ message: "GOOGLE_MAPS_API_KEY is not configured" });
+  }
+
+  const { query, lat, lng } = req.query;
+  const params = new URLSearchParams({
+    query,
+    key: process.env.GOOGLE_MAPS_API_KEY,
+  });
+
+  if (lat && lng) {
+    params.set("location", `${lat},${lng}`);
+    params.set("radius", "5000");
+  }
+
+  const response = await fetch(
+    `https://maps.googleapis.com/maps/api/place/textsearch/json?${params.toString()}`
+  );
+  const data = await response.json();
+  return res.json(data);
+}
+
+async function importCafes(req, res) {
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    return res.status(400).json({ message: "GOOGLE_MAPS_API_KEY is not configured" });
+  }
+
+  const { query = "", lat, lng, radius = 5000, limit = 10 } = req.body;
+  const placesData = await fetchGooglePlacesForImport({ query, lat, lng, radius });
+
+  if (placesData.status !== "OK" && placesData.status !== "ZERO_RESULTS") {
+    return res.status(400).json({
+      message: "Google Places did not return usable results",
+      status: placesData.status,
+      error: placesData.error_message || null,
+    });
+  }
+
+  const imported = [];
+  for (const place of (placesData.results || []).slice(0, Number(limit))) {
+    const cafe = mapPlaceToCafe(place);
+    const savedCafe = await Cafe.findOneAndUpdate({ id: cafe.id }, cafe, {
+      upsert: true,
+      new: true,
+      runValidators: true,
+      setDefaultsOnInsert: true,
+    }).lean();
+    imported.push(savedCafe);
+  }
+
+  return res.json({
+    message: "Cafe import completed",
+    importedCount: imported.length,
+    cafes: imported,
+  });
+}
+
+async function directions(req, res) {
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    return res.status(400).json({ message: "GOOGLE_MAPS_API_KEY is not configured" });
+  }
+
+  const { origin, destination, mode = "driving" } = req.query;
+  const params = new URLSearchParams({
+    origin,
+    destination,
+    mode,
+    key: process.env.GOOGLE_MAPS_API_KEY,
+  });
+
+  const response = await fetch(
+    `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`
+  );
+  const data = await response.json();
+  return res.json(data);
+}
+
+module.exports = {
+  searchPlaces,
+  importCafes,
+  directions,
+};
