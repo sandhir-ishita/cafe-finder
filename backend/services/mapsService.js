@@ -1,13 +1,29 @@
 const { parseAddressParts, slugify } = require("../utils/cafeHelpers");
 
-function buildPhotoUrl(photoReference) {
-  if (!photoReference || !process.env.GOOGLE_MAPS_API_KEY) {
-    return "https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=900&q=80";
-  }
+function getPhotoReference(place) {
+  const ref = place.photos?.[0]?.photo_reference;
+  if (!ref) return null;
+  return ref;
+}
 
-  return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=900&photo_reference=${encodeURIComponent(
-    photoReference
-  )}&key=${encodeURIComponent(process.env.GOOGLE_MAPS_API_KEY)}`;
+// FIX: Extract structured opening hours periods from Google Places data.
+// These are stored in DB so openNow can be computed live at query time.
+function extractOpeningHours(place) {
+  const periods = place.opening_hours?.periods;
+  if (!Array.isArray(periods) || periods.length === 0) return [];
+
+  return periods
+    .filter(
+      (p) =>
+        p?.open?.day !== undefined &&
+        p?.open?.time !== undefined &&
+        p?.close?.day !== undefined &&
+        p?.close?.time !== undefined
+    )
+    .map((p) => ({
+      open: { day: p.open.day, time: p.open.time },
+      close: { day: p.close.day, time: p.close.time },
+    }));
 }
 
 function mapPlaceToCafe(place) {
@@ -20,22 +36,28 @@ function mapPlaceToCafe(place) {
         .map((type) => type.replace(/_/g, " "))
     : [];
 
+  const photoRef = getPhotoReference(place);
+
   return {
     id: `google-${place.place_id || slugify(placeName)}`,
     name: placeName,
     area,
     city,
     rating: typeof place.rating === "number" ? place.rating : 4,
-    priceLevel: typeof place.price_level === "number" ? Math.min(Math.max(place.price_level, 1), 4) : 2,
+    priceLevel:
+      typeof place.price_level === "number" ? Math.min(Math.max(place.price_level, 1), 4) : 2,
     wifi: tags.some((tag) => ["cafe", "coffee", "bakery"].includes(tag)) || false,
     powerSockets: false,
-    openNow: Boolean(place.opening_hours?.open_now),
+    // FIX: Store structured hours instead of a static boolean
+    openingHours: extractOpeningHours(place),
     location: {
       lat: place.geometry?.location?.lat ?? null,
       lng: place.geometry?.location?.lng ?? null,
     },
     tags: tags.length ? tags : ["cafe", "coffee"],
-    image: buildPhotoUrl(place.photos?.[0]?.photo_reference),
+    image: photoRef
+      ? `__google_photo__${photoRef}`
+      : "https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=900&q=80",
     description:
       place.editorial_summary?.overview ||
       `${placeName} in ${city} discovered from Google Places. Great for exploring real cafes nearby.`,
@@ -90,5 +112,6 @@ async function fetchGooglePlacesForImport({ query, lat, lng, radius = 5000 }) {
 module.exports = {
   fetchGooglePlacesForImport,
   mapPlaceToCafe,
-  buildPhotoUrl,
+  getPhotoReference,
 };
+

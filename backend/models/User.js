@@ -18,6 +18,13 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // FIX: role field added to support adminOnly middleware.
+    // Default is "user". Set to "admin" manually in DB or via a seed script.
+    role: {
+      type: String,
+      enum: ["user", "admin"],
+      default: "user",
+    },
   },
   {
     timestamps: true,

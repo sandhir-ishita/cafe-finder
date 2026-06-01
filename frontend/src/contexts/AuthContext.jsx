@@ -6,14 +6,27 @@ const AUTH_STORAGE_KEY = "smart-cafe-finder-auth";
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
+  // FIX: Wrap localStorage read in try/catch.
+  // Corrupted JSON (from browser extensions, partial writes, etc.) previously
+  // caused an uncaught SyntaxError that crashed the entire React tree on startup.
   const [auth, setAuth] = useState(() => {
-    const saved = localStorage.getItem(AUTH_STORAGE_KEY);
-    return saved ? JSON.parse(saved) : { token: "", user: null };
+    try {
+      const saved = localStorage.getItem(AUTH_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : { token: "", user: null };
+    } catch {
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+      return { token: "", user: null };
+    }
   });
 
   useEffect(() => {
     setAuthToken(auth.token);
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+    try {
+      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+    } catch {
+      // localStorage can throw if storage quota is exceeded (e.g. private mode on some browsers)
+      console.warn("Could not persist auth state to localStorage");
+    }
   }, [auth]);
 
   const login = async (payload) => {

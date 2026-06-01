@@ -79,8 +79,45 @@ async function directions(req, res) {
   return res.json(data);
 }
 
+// FIX: Photo proxy — the API key never leaves the server.
+// Frontend requests /api/maps/photo?ref=<photo_reference>
+// This replaces storing a full signed Google URL (with key) in MongoDB.
+async function proxyPhoto(req, res) {
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    return res.status(400).json({ message: "GOOGLE_MAPS_API_KEY is not configured" });
+  }
+
+  const { ref } = req.query;
+
+  if (!ref || typeof ref !== "string" || ref.length > 500) {
+    return res.status(400).json({ message: "Invalid photo reference" });
+  }
+
+  const params = new URLSearchParams({
+    maxwidth: "900",
+    photo_reference: ref,
+    key: process.env.GOOGLE_MAPS_API_KEY,
+  });
+
+  const googleRes = await fetch(
+    `https://maps.googleapis.com/maps/api/place/photo?${params.toString()}`
+  );
+
+  if (!googleRes.ok) {
+    return res.status(502).json({ message: "Could not fetch photo from Google" });
+  }
+
+  // Cache for 7 days — Google photo references are stable
+  res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+  res.setHeader("Content-Type", googleRes.headers.get("content-type") || "image/jpeg");
+
+  const buffer = await googleRes.arrayBuffer();
+  return res.send(Buffer.from(buffer));
+}
+
 module.exports = {
   searchPlaces,
   importCafes,
   directions,
+  proxyPhoto,
 };

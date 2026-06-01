@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CafeCard from "../components/CafeCard";
 import FilterBar from "../components/FilterBar";
 import Map from "../components/Map";
@@ -13,6 +13,20 @@ import {
 } from "../api";
 import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../contexts/ToastContext";
+
+// FIX: Resolve Google Place photo references to the backend proxy URL.
+// Previously the full signed URL (with API key) was stored in the DB and
+// served directly to browsers. Now image fields starting with "__google_photo__"
+// are rewritten to our proxy endpoint, keeping the API key server-side only.
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
+export function resolveImageUrl(image) {
+  if (!image) return "https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=900&q=80";
+  if (image.startsWith("__google_photo__")) {
+    const ref = image.replace("__google_photo__", "");
+    return `${API_BASE}/api/maps/photo?ref=${encodeURIComponent(ref)}`;
+  }
+  return image;
+}
 
 function Home() {
   const { isAuthenticated, user } = useAuth();
@@ -44,29 +58,30 @@ function Home() {
     }
   };
 
-  const refreshRecommendations = async () => {
+  const refreshRecommendations = useCallback(async (currentFilters) => {
     try {
       setRecommendationLoading(true);
       const response = await getRecommendations({
-        search: filters.search || undefined,
-        city: filters.city || undefined,
+        search: currentFilters.search || undefined,
+        city: currentFilters.city || undefined,
       });
       setRecommendations(response.data);
     } finally {
       setRecommendationLoading(false);
     }
-  };
+  }, []);
 
-  const loadCafes = async ({ page = 1, append = false } = {}) => {
+  // FIX: Accept filters as a param to avoid stale closure issues
+  const loadCafes = useCallback(async ({ page = 1, append = false, currentFilters } = {}) => {
     setLoading(true);
     setError("");
 
     try {
       const response = await getCafes({
-        search: filters.search || undefined,
-        city: filters.city || undefined,
-        wifi: filters.wifi ? "true" : undefined,
-        openNow: filters.openNow ? "true" : undefined,
+        search: currentFilters.search || undefined,
+        city: currentFilters.city || undefined,
+        wifi: currentFilters.wifi ? "true" : undefined,
+        openNow: currentFilters.openNow ? "true" : undefined,
         page,
         pageSize: pagination.pageSize,
       });
@@ -78,15 +93,15 @@ function Home() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [pagination.pageSize]);
 
   useEffect(() => {
     refreshCities();
   }, []);
 
   useEffect(() => {
-    refreshRecommendations();
-  }, [filters.city, filters.search]);
+    refreshRecommendations(filters);
+  }, [filters.city, filters.search, refreshRecommendations]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) {
@@ -106,7 +121,7 @@ function Home() {
   }, [isAuthenticated, user]);
 
   useEffect(() => {
-    loadCafes({ page: 1 });
+    loadCafes({ page: 1, currentFilters: filters });
   }, [filters]);
 
   useEffect(() => {
@@ -166,12 +181,12 @@ function Home() {
         limit: 12,
       });
 
-      await Promise.all([refreshCities(), refreshRecommendations()]);
+      await Promise.all([refreshCities(), refreshRecommendations(filters)]);
       setFilters((current) => ({
         ...current,
         city: current.city || importQuery,
       }));
-      await loadCafes({ page: 1 });
+      await loadCafes({ page: 1, currentFilters: { ...filters, city: filters.city || importQuery } });
       if (!silent) {
         showToast(
           `${response.data.importedCount} cafe${response.data.importedCount === 1 ? "" : "s"} imported for ${importQuery}.`,
@@ -194,6 +209,7 @@ function Home() {
     const existingFavoriteId = favoriteMap[cafe.id];
     setFavoriteBusyId(cafe.id);
 
+    // Optimistic update
     setFavoriteMap((current) => {
       const next = { ...current };
       if (existingFavoriteId) {
@@ -217,17 +233,16 @@ function Home() {
         showToast(`${cafe.name} added to favorites.`, "success");
       }
     } catch (err) {
-      setFavoriteMap((current) => ({
-        ...current,
-        [cafe.id]: existingFavoriteId || undefined,
-      }));
-      if (!existingFavoriteId) {
-        setFavoriteMap((current) => {
-          const next = { ...current };
-          delete next[cafe.id];
-          return next;
-        });
-      }
+      // FIX: Clean single rollback — no conflicting double-write
+      setFavoriteMap((current) => {
+        const next = { ...current };
+        if (existingFavoriteId) {
+          next[cafe.id] = existingFavoriteId; // restore the removed favorite
+        } else {
+          delete next[cafe.id]; // remove the incorrectly-added entry
+        }
+        return next;
+      });
       setError(err.response?.data?.message || "Could not update favorites right now.");
     } finally {
       setFavoriteBusyId("");
@@ -280,7 +295,7 @@ function Home() {
               {cafes.map((cafe) => (
                 <CafeCard
                   key={cafe.id}
-                  cafe={cafe}
+                  cafe={{ ...cafe, image: resolveImageUrl(cafe.image) }}
                   isFavorite={Boolean(favoriteMap[cafe.id])}
                   favoriteBusy={favoriteBusyId === cafe.id}
                   onToggleFavorite={toggleFavorite}
@@ -294,7 +309,7 @@ function Home() {
               <button
                 type="button"
                 className="button button--ghost"
-                onClick={() => loadCafes({ page: pagination.page + 1, append: true })}
+                onClick={() => loadCafes({ page: pagination.page + 1, append: true, currentFilters: filters })}
                 disabled={loading}
               >
                 {loading ? "Loading..." : "Load more cafes"}

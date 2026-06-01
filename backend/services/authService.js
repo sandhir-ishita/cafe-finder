@@ -2,12 +2,15 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
+// FIX: Include role in the token so adminOnly middleware can read it
+// without an extra DB query on every request.
 function signToken(user) {
   return jwt.sign(
     {
       id: user._id.toString(),
       email: user.email,
       name: user.name,
+      role: user.role || "user",
     },
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
@@ -36,6 +39,7 @@ async function registerUser({ name, email, password }) {
       id: user._id,
       name: user.name,
       email: user.email,
+      role: user.role,
     },
   };
 }
@@ -63,6 +67,7 @@ async function loginUser({ email, password }) {
       id: user._id,
       name: user.name,
       email: user.email,
+      role: user.role,
     },
   };
 }

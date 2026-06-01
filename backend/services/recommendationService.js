@@ -1,12 +1,12 @@
+// FIX: Was calling /v1/responses which does not exist.
+// Correct endpoint is /v1/chat/completions with messages array.
 async function fetchOpenAIRecommendation(cafe, reviews) {
-  const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const reviewText = reviews.length
     ? reviews.map((review) => `${review.authorName}: ${review.text}`).join("\n")
     : "No written reviews yet.";
 
-  const prompt = `
-You are ranking cafes for students and remote workers.
-Return JSON with keys: summary, quietness, studySuitability, popularity, highlights.
+  const prompt = `Analyze this cafe for students and remote workers.
 
 Cafe:
 ${JSON.stringify(
@@ -27,9 +27,16 @@ ${JSON.stringify(
 
 Reviews:
 ${reviewText}
-`;
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+Return a JSON object with exactly these keys:
+- summary (string): one-sentence summary
+- quietness (string): "High", "Medium", or "Low"
+- studySuitability (string): one sentence
+- popularity (string): "Very popular", "Popular", or "More niche"
+- highlights (array of strings): 3 bullet points`;
+
+  // FIX: Correct endpoint, correct request shape
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -37,42 +44,33 @@ ${reviewText}
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      input: prompt,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "cafe_recommendation",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              summary: { type: "string" },
-              quietness: { type: "string" },
-              studySuitability: { type: "string" },
-              popularity: { type: "string" },
-              highlights: {
-                type: "array",
-                items: { type: "string" },
-              },
-            },
-            required: ["summary", "quietness", "studySuitability", "popularity", "highlights"],
-          },
+      // FIX: response_format replaces the broken text.format field
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a cafe ranking assistant. Always respond with a valid JSON object only — no markdown, no explanation outside JSON.",
         },
-      },
+        { role: "user", content: prompt },
+      ],
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI request failed with status ${response.status}`);
+    const body = await response.text().catch(() => "");
+    throw new Error(`OpenAI request failed with status ${response.status}: ${body}`);
   }
 
   const data = await response.json();
-  if (!data.output_text) {
+  const content = data.choices?.[0]?.message?.content;
+
+  if (!content) {
     throw new Error("OpenAI response was empty");
   }
 
   return {
-    ...JSON.parse(data.output_text),
+    ...JSON.parse(content),
     source: "openai",
   };
 }
